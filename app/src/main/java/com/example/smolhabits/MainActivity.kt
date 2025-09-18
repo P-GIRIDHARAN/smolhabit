@@ -106,24 +106,48 @@ fun TimePickerDialog(
     )
 }
 
-fun scheduleHabitReminder(context: Context, habitName: String, hour: Int, minute: Int) {
-    val now = java.util.Calendar.getInstance()
-    val reminderTime = java.util.Calendar.getInstance().apply {
-        set(java.util.Calendar.HOUR_OF_DAY, hour)
-        set(java.util.Calendar.MINUTE, minute)
-        set(java.util.Calendar.SECOND, 0)
-        set(java.util.Calendar.MILLISECOND, 0)
-        if (before(now)) add(java.util.Calendar.DAY_OF_MONTH, 1)
-    }
-    val delayMillis = reminderTime.timeInMillis - now.timeInMillis
+fun scheduleHabitReminder(context: Context, habitName: String, hour: Int, minute: Int, delayInMinutes: Int? = null) {
     val data = androidx.work.Data.Builder()
         .putString("habitName", habitName)
         .build()
-    val workRequest = androidx.work.OneTimeWorkRequestBuilder<com.example.smolhabits.ReminderWorker>()
-        .setInitialDelay(delayMillis, java.util.concurrent.TimeUnit.MILLISECONDS)
-        .setInputData(data)
-        .build()
-    androidx.work.WorkManager.getInstance(context).enqueue(workRequest)
+        
+    val workRequest = if (delayInMinutes != null) {
+        // Quick timer mode - notify after X minutes
+        androidx.work.OneTimeWorkRequestBuilder<com.example.smolhabits.ReminderWorker>()
+            .setInitialDelay(delayInMinutes.toLong(), java.util.concurrent.TimeUnit.MINUTES)
+            .setInputData(data)
+            .addTag("quick_reminder")  // Tag for identification
+            .setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST) // Expedited to run even in Doze mode
+            .build()
+    } else {
+        // Daily reminder mode
+        val now = java.util.Calendar.getInstance()
+        val reminderTime = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, hour)
+            set(java.util.Calendar.MINUTE, minute)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+            if (before(now)) add(java.util.Calendar.DAY_OF_MONTH, 1)
+        }
+        val delayMillis = reminderTime.timeInMillis - now.timeInMillis
+        androidx.work.OneTimeWorkRequestBuilder<com.example.smolhabits.ReminderWorker>()
+            .setInitialDelay(delayMillis, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .setInputData(data)
+            .addTag("daily_reminder")  // Tag for identification
+            .setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST) // Expedited to run even in Doze mode
+            .build()
+    }
+    
+    // Cancel any existing reminders with the same tag
+    val workManager = androidx.work.WorkManager.getInstance(context)
+    if (delayInMinutes != null) {
+        workManager.cancelAllWorkByTag("quick_reminder")
+    } else {
+        workManager.cancelAllWorkByTag("daily_reminder")
+    }
+    
+    // Schedule the new reminder
+    workManager.enqueue(workRequest)
 }
 @Composable
 fun SmolHabitsApp(modifier: Modifier = Modifier) {
@@ -272,10 +296,41 @@ private fun HabitActiveScreen(
         var hour by remember { mutableStateOf(habit.reminderHour) }
         var minute by remember { mutableStateOf(habit.reminderMinute) }
         var showTimePicker by remember { mutableStateOf(false) }
+        var quickTimerMinutes by remember { mutableStateOf("1") }
         val context = LocalContext.current
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Quick Timer
+            OutlinedTextField(
+                value = quickTimerMinutes,
+                onValueChange = { quickTimerMinutes = it },
+                label = { Text("Minutes") },
+                modifier = Modifier.weight(1f)
+            )
+            Button(
+                onClick = { 
+                    quickTimerMinutes.toIntOrNull()?.let { minutes ->
+                        scheduleHabitReminder(context, habit.name, 0, 0, minutes)
+                    }
+                },
+                modifier = Modifier.align(Alignment.CenterVertically)
+            ) {
+                Text("Start Timer")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            "Or set daily reminder:",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+        )
         Spacer(modifier = Modifier.height(8.dp))
         Button(onClick = { showTimePicker = true }, modifier = Modifier.fillMaxWidth()) {
-            Text("Set Reminder Time: %02d:%02d".format(hour, minute))
+            Text("Set Daily Reminder: %02d:%02d".format(hour, minute))
         }
         if (showTimePicker) {
             TimePickerDialog(

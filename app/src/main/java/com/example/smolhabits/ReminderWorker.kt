@@ -29,7 +29,12 @@ class ReminderWorker(
                 channelId,
                 "Habit Reminders",
                 NotificationManager.IMPORTANCE_HIGH
-            )
+            ).apply {
+                enableLights(true)
+                enableVibration(true)
+                setShowBadge(true)
+                importance = NotificationManager.IMPORTANCE_HIGH
+            }
             notificationManager.createNotificationChannel(channel)
         }
 
@@ -37,8 +42,11 @@ class ReminderWorker(
             .setContentTitle("Habit Reminder")
             .setContentText("Time to do: $habitName")
             .setSmallIcon(android.R.drawable.ic_popup_reminder)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
             .build()
 
-        notificationManager.notify(1, notification)
+        notificationManager.notify(System.currentTimeMillis().toInt(), notification)
     }
 }
