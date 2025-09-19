@@ -27,19 +27,19 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.smolhabits.data.Habit
 import com.example.smolhabits.ui.theme.SmolhabitsTheme
+import java.util.*
+
 class MainActivity : ComponentActivity() {
-    
+
     private val requestNotificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        // Handle permission result if needed
-    }
-    
+    ) { /* handle if needed */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        
-        // Request notification permission for Android 13+
+
+        // Request notification permission Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(
                     this,
@@ -49,7 +49,7 @@ class MainActivity : ComponentActivity() {
                 requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
-        
+
         setContent {
             SmolhabitsTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
@@ -60,7 +60,35 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@Composable
+fun SmolHabitsApp(modifier: Modifier = Modifier) {
+    var currentHabit by remember { mutableStateOf<Habit?>(null) }
+    var isCompletedToday by remember { mutableStateOf(false) }
 
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        if (currentHabit == null) {
+            HabitSelectionScreen(onHabitSelected = {
+                currentHabit = it
+                isCompletedToday = false
+            })
+        } else {
+            HabitActiveScreen(
+                habit = currentHabit!!,
+                isCompletedToday = isCompletedToday,
+                onHabitCompleted = { isCompletedToday = true },
+                onClearHabit = { currentHabit = null }
+            )
+        }
+    }
+}
+
+// ---------------- TIME PICKER DIALOG ----------------
 @Composable
 fun TimePickerDialog(
     initialHour: Int,
@@ -68,9 +96,9 @@ fun TimePickerDialog(
     onTimeSelected: (Int, Int) -> Unit,
     onDismiss: () -> Unit
 ) {
-    // Simple Compose time picker dialog
     var hour by remember { mutableStateOf(initialHour) }
     var minute by remember { mutableStateOf(initialMinute) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Select Reminder Time") },
@@ -94,140 +122,105 @@ fun TimePickerDialog(
             }
         },
         confirmButton = {
-            Button(onClick = { onTimeSelected(hour, minute) }) {
-                Text("Set")
-            }
+            Button(onClick = { onTimeSelected(hour, minute) }) { Text("Set") }
         },
         dismissButton = {
-            Button(onClick = onDismiss) {
-                Text("Cancel")
-            }
+            Button(onClick = onDismiss) { Text("Cancel") }
         }
     )
 }
 
-fun scheduleHabitReminder(context: Context, habitName: String, hour: Int, minute: Int, delayInMinutes: Int? = null) {
-    val data = androidx.work.Data.Builder()
-        .putString("habitName", habitName)
-        .build()
-        
+// ---------------- NOTIFICATION SCHEDULER ----------------
+private fun schedulePushNotification(
+    context: Context,
+    habitName: String,
+    hour: Int,
+    minute: Int,
+    delayInMinutes: Int? = null
+) {
+    val data = androidx.work.Data.Builder().putString("habitName", habitName).build()
     val workRequest = if (delayInMinutes != null) {
-        // Quick timer mode - notify after X minutes
-        androidx.work.OneTimeWorkRequestBuilder<com.example.smolhabits.ReminderWorker>()
+        androidx.work.OneTimeWorkRequestBuilder<ReminderWorker>()
             .setInitialDelay(delayInMinutes.toLong(), java.util.concurrent.TimeUnit.MINUTES)
             .setInputData(data)
-            .addTag("quick_reminder")  // Tag for identification
-            .setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST) // Expedited to run even in Doze mode
+            .addTag("quick_reminder")
+            .setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .build()
     } else {
-        // Daily reminder mode
-        val now = java.util.Calendar.getInstance()
-        val reminderTime = java.util.Calendar.getInstance().apply {
-            set(java.util.Calendar.HOUR_OF_DAY, hour)
-            set(java.util.Calendar.MINUTE, minute)
-            set(java.util.Calendar.SECOND, 0)
-            set(java.util.Calendar.MILLISECOND, 0)
-            if (before(now)) add(java.util.Calendar.DAY_OF_MONTH, 1)
+        val now = Calendar.getInstance()
+        val reminderTime = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, hour)
+            set(Calendar.MINUTE, minute)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+            if (before(now)) add(Calendar.DAY_OF_MONTH, 1)
         }
         val delayMillis = reminderTime.timeInMillis - now.timeInMillis
-        androidx.work.OneTimeWorkRequestBuilder<com.example.smolhabits.ReminderWorker>()
+        androidx.work.OneTimeWorkRequestBuilder<ReminderWorker>()
             .setInitialDelay(delayMillis, java.util.concurrent.TimeUnit.MILLISECONDS)
             .setInputData(data)
-            .addTag("daily_reminder")  // Tag for identification
-            .setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST) // Expedited to run even in Doze mode
+            .addTag("daily_reminder")
+            .setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .build()
     }
-    
-    // Cancel any existing reminders with the same tag
+
     val workManager = androidx.work.WorkManager.getInstance(context)
     if (delayInMinutes != null) {
         workManager.cancelAllWorkByTag("quick_reminder")
     } else {
         workManager.cancelAllWorkByTag("daily_reminder")
     }
-    
-    // Schedule the new reminder
     workManager.enqueue(workRequest)
 }
-@Composable
-fun SmolHabitsApp(modifier: Modifier = Modifier) {
-    var currentHabit by remember { mutableStateOf<Habit?>(null) }
-    var isCompletedToday by remember { mutableStateOf(false) }
-    
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(24.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        when {
-            currentHabit == null -> {
-                HabitSelectionScreen(
-                    onHabitSelected = { habit ->
-                        currentHabit = habit
-                        isCompletedToday = false
-                    }
-                )
-            }
-            else -> {
-                HabitActiveScreen(
-                    habit = currentHabit!!,
-                    isCompletedToday = isCompletedToday,
-                    onHabitCompleted = { isCompletedToday = true },
-                    onClearHabit = { currentHabit = null }
-                )
-            }
-        }
-    }
-}
 
+// ---------------- SCREENS ----------------
 @Composable
-private fun HabitSelectionScreen(onHabitSelected: (Habit) -> Unit) {
-    val habits = listOf(
-        Habit("drink_water", "Drink Water", "", "Stay hydrated with a glass of water"),
-        Habit("stretch", "Stretch", "", "Take a moment to stretch your body"),
-        Habit("meditate", "Meditate", "", "Find peace with a few minutes of meditation")
-    )
-    
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(32.dp)
-    ) {
-        Text(
-            text = "Choose Your\nDaily Focus",
-            style = MaterialTheme.typography.headlineLarge.copy(
-                fontWeight = FontWeight.Light,
-                lineHeight = 36.sp
-            ),
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-        
-        Text(
-            text = "Pick one habit to focus on today.\nSimple. Effective. Sustainable.",
-            style = MaterialTheme.typography.bodyLarge,
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
-        )
-        
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        habits.forEach { habit ->
-            HabitSelectionCard(
-                habit = habit,
-                onClick = { onHabitSelected(habit) }
+fun HabitSelectionScreen(onHabitSelected: (Habit) -> Unit) {
+    val context = LocalContext.current
+    var hour by remember { mutableStateOf(8) }
+    var minute by remember { mutableStateOf(0) }
+    var showTimePicker by remember { mutableStateOf(false) }
+
+    // Example habit card
+    HabitSelectionCard(
+        habit = Habit(
+            id = "drink_water",
+            name = "Drink Water",
+            emoji = "🚰",
+            description = "Stay hydrated"
+        ),
+        onClick = {
+            onHabitSelected(
+                Habit(
+                    id = "drink_water",
+                    name = "Drink Water",
+                    emoji = "🚰",
+                    description = "Stay hydrated"
+                )
             )
         }
+    )
+
+
+    if (showTimePicker) {
+        TimePickerDialog(
+            initialHour = hour,
+            initialMinute = minute,
+            onTimeSelected = { h, m ->
+                hour = h
+                minute = m
+                schedulePushNotification(context, "Drink Water", h, m)
+                showTimePicker = false
+            },
+            onDismiss = { showTimePicker = false }
+        )
     }
 }
 
 @Composable
 private fun HabitSelectionCard(habit: Habit, onClick: () -> Unit) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() },
+        modifier = Modifier.fillMaxWidth().clickable { onClick() },
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -245,12 +238,10 @@ private fun HabitSelectionCard(habit: Habit, onClick: () -> Unit) {
                     .background(MaterialTheme.colorScheme.primaryContainer, CircleShape)
                     .wrapContentSize()
             )
-            
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = habit.name,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium),
-                    color = MaterialTheme.colorScheme.onSurface
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium)
                 )
                 Text(
                     text = habit.description,
@@ -269,114 +260,73 @@ private fun HabitActiveScreen(
     onHabitCompleted: () -> Unit,
     onClearHabit: () -> Unit
 ) {
+    val context = LocalContext.current
+    var hour by remember { mutableStateOf(habit.reminderHour) }
+    var minute by remember { mutableStateOf(habit.reminderMinute) }
+    var showTimePicker by remember { mutableStateOf(false) }
+    var quickTimerMinutes by remember { mutableStateOf("1") }
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(32.dp)
+        verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
-        // Header with habit info
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(text = habit.emoji, fontSize = 72.sp)
-            Text(
-                text = habit.name,
-                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Medium),
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            Text(
-                text = habit.description,
-                style = MaterialTheme.typography.bodyLarge,
-                textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
-            )
-        }
-        
-        // Timer UI
-        var hour by remember { mutableStateOf(habit.reminderHour) }
-        var minute by remember { mutableStateOf(habit.reminderMinute) }
-        var showTimePicker by remember { mutableStateOf(false) }
-        var quickTimerMinutes by remember { mutableStateOf("1") }
-        val context = LocalContext.current
+        Text(text = habit.emoji, fontSize = 72.sp)
+        Text(
+            text = habit.name,
+            style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Medium)
+        )
+        Text(
+            text = habit.description,
+            style = MaterialTheme.typography.bodyLarge,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+        )
 
+        // Quick timer
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Quick Timer
             OutlinedTextField(
                 value = quickTimerMinutes,
                 onValueChange = { quickTimerMinutes = it },
                 label = { Text("Minutes") },
                 modifier = Modifier.weight(1f)
             )
-            Button(
-                onClick = { 
-                    quickTimerMinutes.toIntOrNull()?.let { minutes ->
-                        scheduleHabitReminder(context, habit.name, 0, 0, minutes)
-                    }
-                },
-                modifier = Modifier.align(Alignment.CenterVertically)
-            ) {
+            Button(onClick = {
+                quickTimerMinutes.toIntOrNull()?.let {
+                    schedulePushNotification(context, habit.name, 0, 0, it)
+                }
+            }) {
                 Text("Start Timer")
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            "Or set daily reminder:",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Button(onClick = { showTimePicker = true }, modifier = Modifier.fillMaxWidth()) {
-            Text("Set Daily Reminder: %02d:%02d".format(hour, minute))
+        Text("Or set daily reminder:")
+
+        Button(onClick = { showTimePicker = true }) {
+            Text("Set Reminder Time")
         }
+
         if (showTimePicker) {
             TimePickerDialog(
                 initialHour = hour,
                 initialMinute = minute,
                 onTimeSelected = { h, m ->
-                    hour = h
-                    minute = m
-                    showTimePicker = false
-                    // Schedule notification
-                    scheduleHabitReminder(context, habit.name, h, m)
+                    hour = h; minute = m; showTimePicker = false
+                    schedulePushNotification(context, habit.name, h, m)
                 },
                 onDismiss = { showTimePicker = false }
             )
         }
-        
+
         // Complete button
         if (isCompletedToday) {
-            Button(
-                onClick = { },
-                modifier = Modifier.fillMaxWidth().height(56.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                enabled = false
-            ) {
-                Text("Completed Today! ", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium))
-            }
+            Button(onClick = {}, enabled = false) { Text("Completed Today!") }
         } else {
-            Button(
-                onClick = onHabitCompleted,
-                modifier = Modifier.fillMaxWidth().height(56.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-            ) {
-                Text("Mark Complete ", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium))
-            }
+            Button(onClick = onHabitCompleted) { Text("Mark Complete") }
         }
-        
-        // Change habit button
-        TextButton(
-            onClick = onClearHabit,
-            colors = ButtonDefaults.textButtonColors(
-                contentColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
-            )
-        ) {
-            Text("Change Habit")
-        }
+
+        TextButton(onClick = onClearHabit) { Text("Change Habit") }
     }
 }
